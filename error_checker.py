@@ -101,6 +101,10 @@ def error_checker_handler(event, context):
     if len(combiner_error_list) != 0 or len(processor_error_list) != 0 or s3_error or sqs_error:
         report_errors(combiner_error_list, processor_error_list, s3_error, sqs_error, logger)
         sys.exit(1)
+        
+    # Remove /tmp/generate txt files
+    remove_tmp(txt_list)
+    logger.info("Removed temporary txt files.")
     
 def get_logger():
     """Return a formatted logger object."""
@@ -427,3 +431,9 @@ def publish_event(message, logger):
         sys.exit(1)
     
     logger.info(f"Message published to SNS Topic: {topic_arn}.")
+
+def remove_tmp(txt_list):
+    """Remove temporary txt files."""
+    
+    for txt_files in txt_list.values():
+        for txt_file in txt_files: txt_file.unlink()
