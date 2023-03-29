@@ -54,10 +54,12 @@ def error_checker_handler(event, context):
     # Find combiner errors
     combiner_file_list, combiner_error_logs = check_combiner()
     if len(combiner_file_list) > 0: logger.info("Located quarantined combiner files.")
+    else: logger.info("No quarantined combiner files were located.")
     
     # Find processor errors
     processor_file_list, processor_error_logs = check_processor()
     if len(processor_file_list) > 0: logger.info("Located quarantined processor files.")
+    else: logger.info("No quarantined processor files were located.")
     
     # If there are no quarantine files, exit
     if len(combiner_file_list) == 0 and len(processor_file_list) == 0:
@@ -137,8 +139,11 @@ def check_combiner():
     Return Tuple of list of files and corresponding error logs.
     """
     
-    with os.scandir(DATA_DIR.joinpath("processor", "input", "quarantine")) as entries:
-        file_list = [pathlib.Path(entry) for entry in entries]
+    try:
+        with os.scandir(DATA_DIR.joinpath("processor", "input", "quarantine")) as entries:
+            file_list = [pathlib.Path(entry) for entry in entries]
+    except FileNotFoundError:
+        file_list = []
     
     with os.scandir(DATA_DIR.joinpath("processor", "input")) as entries:
         error_log = [pathlib.Path(entry) for entry in entries if "ghrsst_error_log_archive" in entry.name]
@@ -151,8 +156,11 @@ def check_processor():
     Return Tuple of list of files and corresponding error logs.
     """
     
-    with os.scandir(DATA_DIR.joinpath("processor", "scratch", "quarantine")) as entries:
-        file_list = [pathlib.Path(entry) for entry in entries]
+    try:
+        with os.scandir(DATA_DIR.joinpath("processor", "scratch", "quarantine")) as entries:
+            file_list = [pathlib.Path(entry) for entry in entries]
+    except FileNotFoundError:
+        file_list = []
     
     with os.scandir(DATA_DIR.joinpath("processor", "logs", "error_logs")) as entries:
         error_log = [pathlib.Path(entry) for entry in entries]
