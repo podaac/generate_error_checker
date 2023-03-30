@@ -10,6 +10,7 @@ for quarantined files.
 
 # Standard imports
 import datetime
+import glob
 import json
 import logging
 import os
@@ -35,6 +36,11 @@ PROC_DICT = {
     "A": "AQUA_MODIS",
     "T": "TERRA_MODIS",
     "V": "SNPP_VIIRS"
+}
+DOWNLOAD_DICT = {
+    "AQUA_MODIS": "MODIS_AQUA_L2_SST_OBPG",
+    "TERRA_MODIS": "MODIS_TERRA_L2_SST_OBPG",
+    "SNPP_VIIRS": "VIIRS_L2_SST_OBPG"
 }
 SEARCH_URL = "https://oceandata.sci.gsfc.nasa.gov/api/file_search"
 TOPIC_STRING = "batch-job-failure"
@@ -175,7 +181,7 @@ def search_combiner(file_list, txt_dict, logger):
     
     errors = []
     for file in file_list:
-        if "LAC_GSST" in file.name: continue   # Skip failed combined file
+        if "LAC_GSST" in file.name or "SNPP_GSST" in file.name: continue   # Skip failed combined file
         timestamp = file.name.split('.')[1].replace("T", "")
         file_name = file.name.split('.')[0]
         if "NRT" in file.name:
@@ -354,7 +360,38 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
     # Remove files from EFS    
     delete_list = combiner_file_list + combiner_error_logs + processor_file_list + processor_error_logs
     for file in delete_list: file.unlink()
-
+    
+    # Remove downloads .hidden directory
+    remove_hidden_downloads(combiner_file_list, processor_file_list, logger)
+    
+def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
+    """Remove Attempt to remove any downloads that may be tracked in the 
+    combiner downloads .hidden directory"""
+    
+    download_dir = DATA_DIR.joinpath("combiner", "downloads")
+    for combiner_file in combiner_file_list:
+        if "LAC_GSST" in combiner_file.name or "SNPP_GSST" in combiner_file.name: continue   # Skip failed combined file
+        hidden_dir = download_dir.joinpath(DOWNLOAD_DICT[combiner_file.name.split('.')[0]], ".hidden", combiner_file.name)
+        if hidden_dir.exists():
+            os.rmdir(hidden_dir)
+            logger.info(f"Removed: {hidden_dir}.")
+    
+    for processor_file in processor_file_list:
+        if processor_file.name.startswith("refined_"):
+            timestamp = processor_file.name.split("_")[1][1:].split('.')[0]
+            file_name = PROC_DICT[processor_file.name.split("_")[1][0]]
+        else:
+            timestamp = processor_file.name.split('.')[0][1:]
+            file_name = PROC_DICT[processor_file.name.split('.')[0][0]]
+        
+        search_dir = download_dir.joinpath(DOWNLOAD_DICT[file_name], ".hidden")
+        search_file = f"{file_name}.{timestamp}.L2.*"
+        
+        dir_list = glob.glob(f"{search_dir}/{search_file}")
+        for hidden_dir in dir_list: 
+            os.rmdir(hidden_dir)
+            logger.info(f"Removed: {hidden_dir}.")
+    
 def publish_to_pending(txt_dict, prefix, account, region, logger):
     """Publish txt lists to pending jobs SQS Queue."""
     
