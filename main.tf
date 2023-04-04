@@ -52,9 +52,18 @@ data "aws_sns_topic" "batch_failure_topic" {
   name = "${var.prefix}-batch-job-failure"
 }
 
-data "aws_sqs_queue" "pending_jobs" {
-  name = "${var.prefix}-pending-jobs"
+data "aws_sqs_queue" "pending_jobs_aqua" {
+  name = "${var.prefix}-pending-jobs-aqua.fifo"
 }
+
+data "aws_sqs_queue" "pending_jobs_terra" {
+  name = "${var.prefix}-pending-jobs-terra.fifo"
+}
+
+data "aws_sqs_queue" "pending_jobs_viirs" {
+  name = "${var.prefix}-pending-jobs-viirs.fifo"
+}
+
 
 data "aws_subnet" "private_application_subnet" {
   for_each = toset(data.aws_subnets.private_application_subnets.ids)

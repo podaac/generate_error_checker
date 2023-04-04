@@ -402,14 +402,10 @@ def publish_to_pending(txt_dict, prefix, account, region, logger):
         if len(t_list) > 0:
             try:
                 response = sqs.send_message(
-                    QueueUrl=f"https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs",
+                    QueueUrl=f"https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs-{dataset}.fifo",
                     MessageBody=json.dumps(t_list),
-                    MessageAttributes={
-                        "dataset": {
-                            "StringValue": dataset,
-                            "DataType": "String"
-                        }
-                    }
+                    MessageDeduplicationId=f"{prefix}-{dataset}-{random.randint(1000,9999)}",
+                    MessageGroupId = f"{prefix}-{dataset}"
                 )
                 logger.info(f"Updated queue: https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs")
                 logger.info(f"Published {dataset} list: {t_list}.")

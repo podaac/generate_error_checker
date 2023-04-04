@@ -7,6 +7,7 @@ resource "aws_lambda_function" "aws_lambda_error_checker" {
   runtime          = "python3.9"
   source_code_hash = filebase64sha256("error_checker.zip")
   timeout          = 300
+  memory_size      = 256
   vpc_config {
     subnet_ids         = data.aws_subnets.private_application_subnets.ids
     security_group_ids = data.aws_security_groups.vpc_default_sg.ids
@@ -128,7 +129,11 @@ resource "aws_iam_policy" "aws_lambda_execution_policy" {
         "Action" : [
           "sqs:SendMessage"
         ],
-        "Resource" : "${data.aws_sqs_queue.pending_jobs.arn}"
+        "Resource" : [
+          "${data.aws_sqs_queue.pending_jobs_aqua.arn}",
+          "${data.aws_sqs_queue.pending_jobs_terra.arn}",
+          "${data.aws_sqs_queue.pending_jobs_viirs.arn}"
+        ]
       }
     ]
   })
