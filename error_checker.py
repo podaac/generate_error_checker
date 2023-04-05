@@ -231,7 +231,7 @@ def search_processor(file_list, txt_dict, logger):
             ref = []
             response = response.split('\n')
             for element in response:
-                if "IOP" in element or "LAND" in element: continue
+                if "IOP" in element or "LAND" in element or "PICT" in element: continue
                 if "NRT" in element: nrt.append(element)
                 else: ref.append(element)
             
@@ -372,9 +372,11 @@ def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
     for combiner_file in combiner_file_list:
         if "LAC_GSST" in combiner_file.name or "SNPP_GSST" in combiner_file.name: continue   # Skip failed combined file
         hidden_dir = download_dir.joinpath(DOWNLOAD_DICT[combiner_file.name.split('.')[0]], ".hidden", combiner_file.name)
-        if hidden_dir.exists():
+        if hidden_dir.is_dir():
             os.rmdir(hidden_dir)
-            logger.info(f"Removed: {hidden_dir}.")
+        else:
+            hidden_dir.unlink()
+        logger.info(f"Removed: {hidden_dir}.")
     
     for processor_file in processor_file_list:
         if processor_file.name.startswith("refined_"):
@@ -389,7 +391,10 @@ def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
         
         dir_list = glob.glob(f"{search_dir}/{search_file}")
         for hidden_dir in dir_list: 
-            os.rmdir(hidden_dir)
+            if os.path.isdir(hidden_dir):
+                os.rmdir(hidden_dir)
+            else:
+                os.remove(hidden_dir)
             logger.info(f"Removed: {hidden_dir}.")
     
 def publish_to_pending(txt_dict, prefix, account, region, logger):
