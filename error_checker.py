@@ -342,20 +342,30 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
     
     # Archive location and creation
     archive_dir = DATA_DIR.joinpath("archive")
-    archive_dir.mkdir(parents=True, exist_ok=True)    
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    datetime_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     
-    date = datetime.datetime.now(datetime.timezone.utc)
-    combiner_zip = archive_dir.joinpath(f"combiner_{date.year}{date.month}{date.day}T{date.hour}{date.minute}{date.second}.zip")
-    with zipfile.ZipFile(combiner_zip, mode='w') as archive:
-        for file in combiner_file_list: archive.write(file, arcname=file.name)
-        for file in combiner_error_logs: archive.write(file, arcname=file.name)
-        logger.info(f"Archive created: {combiner_zip}.")
-        
-    processor_zip = archive_dir.joinpath(f"processor_{date.year}{date.month}{date.day}T{date.hour}{date.minute}{date.second}.zip")
-    with zipfile.ZipFile(processor_zip, mode='w') as archive:
-        for file in processor_file_list: archive.write(file, arcname=file.name)
-        for file in processor_error_logs: archive.write(file, arcname=file.name)
-        logger.info(f"Archive created: {processor_zip}.")
+    if len(combiner_file_list) > 0 or len(combiner_error_logs) > 0:
+        combiner_zip = archive_dir.joinpath(f"combiner_{datetime_str}.zip")
+        with zipfile.ZipFile(combiner_zip, mode='w') as archive:
+            for file in combiner_file_list: 
+                archive.write(file, arcname=file.name)
+                logger.info(f"{file} written to {combiner_zip}.")
+            for file in combiner_error_logs: 
+                archive.write(file, arcname=file.name)
+                logger.info(f"{file} written to {combiner_zip}.")
+            logger.info(f"Archive created: {combiner_zip}.")
+    
+    if len(processor_file_list) > 0 or len(processor_error_logs) > 0:    
+        processor_zip = archive_dir.joinpath(f"processor_{datetime_str}.zip")
+        with zipfile.ZipFile(processor_zip, mode='w') as archive:
+            for file in processor_file_list: 
+                archive.write(file, arcname=file.name)
+                logger.info(f"{file} written to {processor_zip}.")
+            for file in processor_error_logs: 
+                archive.write(file, arcname=file.name)
+                logger.info(f"{file} written to {processor_zip}.")
+            logger.info(f"Archive created: {processor_zip}.")
     
     # Remove files from EFS    
     delete_list = combiner_file_list + combiner_error_logs + processor_file_list + processor_error_logs
@@ -373,9 +383,9 @@ def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
         if "LAC_GSST" in combiner_file.name or "SNPP_GSST" in combiner_file.name: continue   # Skip failed combined file
         hidden_dir = download_dir.joinpath(DOWNLOAD_DICT[combiner_file.name.split('.')[0]], ".hidden", combiner_file.name)
         if hidden_dir.is_dir():
-            os.rmdir(hidden_dir)
+            if hidden_dir.exists(): os.rmdir(hidden_dir)
         else:
-            hidden_dir.unlink()
+            if hidden_dir.exists(): hidden_dir.unlink()
         logger.info(f"Removed: {hidden_dir}.")
     
     for processor_file in processor_file_list:
