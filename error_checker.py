@@ -59,13 +59,19 @@ def error_checker_handler(event, context):
     
     # Find combiner errors
     combiner_file_list, combiner_error_logs = check_combiner()
-    if len(combiner_file_list) > 0: logger.info("Located quarantined combiner files.")
-    else: logger.info("No quarantined combiner files were located.")
+    if len(combiner_file_list) > 0: 
+        logger.info("Located quarantined combiner files:")
+        for file in combiner_file_list: logger.info(file)
+    else: 
+        logger.info("No quarantined combiner files were located.")
     
     # Find processor errors
     processor_file_list, processor_error_logs = check_processor()
-    if len(processor_file_list) > 0: logger.info("Located quarantined processor files.")
-    else: logger.info("No quarantined processor files were located.")
+    if len(processor_file_list) > 0: 
+        logger.info("Located quarantined processor files.")
+        for file in processor_file_list: logger.info(file)
+    else: 
+        logger.info("No quarantined processor files were located.")
     
     # If there are no quarantine files, exit
     if len(combiner_file_list) == 0 and len(processor_file_list) == 0:
@@ -200,10 +206,24 @@ def search_combiner(file_list, txt_dict, logger):
             logger.info(f"Located: {file.name}.")
             txt_dict[dataset].append([f"{GET_FILE_URL}/{response[0].split(' ')[2]}", response[0].split(' ')[0]])
         else:
+            logger.info(f"Located multiple: {file.name}.")
+            logger.info(f"Response: {response}.")
+            found = False
             for element in response:
-                logger.info(f"Located multiple: {file.name}. Selecting correct file.")
                 if file.name in element:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{element.split(' ')[2]}", element.split(' ')[0]])
+                    logger.info(f"Selected: {element.split(' ')[2]}")
+                    found = True
+            # Check for quicklook
+            if not found:
+                for element in response:
+                    nrt_file = f"{file.name[:-3]}.NRT.nc"
+                    if nrt_file in element:
+                        txt_dict[dataset].append([f"{GET_FILE_URL}/{element.split(' ')[2]}", element.split(' ')[0]])
+                        logger.info(f"Selected: {element.split(' ')[2]}")
+            else:
+                logger.info(f"Could not select a file for: {file.name}")
+            
     return errors
 
 def search_processor(file_list, txt_dict, logger):
@@ -341,7 +361,7 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
     """
     
     # Archive location and creation
-    archive_dir = DATA_DIR.joinpath("archive")
+    archive_dir = DATA_DIR.joinpath("archive", "error_checker")
     archive_dir.mkdir(parents=True, exist_ok=True)
     datetime_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     
