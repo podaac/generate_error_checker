@@ -24,12 +24,8 @@ provider "aws" {
 # Data sources
 data "aws_caller_identity" "current" {}
 
-data "aws_efs_access_points" "aws_efs_generate_ap" {
-  file_system_id = data.aws_efs_file_system.aws_efs_generate.id
-}
-
-data "aws_efs_file_system" "aws_efs_generate" {
-  creation_token = var.prefix
+data "aws_efs_access_point" "fsap_error_checker" {
+  access_point_id = var.fsap_id
 }
 
 data "aws_s3_bucket" "download_lists" {
