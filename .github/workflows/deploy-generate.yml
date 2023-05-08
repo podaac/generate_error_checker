@@ -53,10 +53,14 @@ jobs:
       # Check out GitHub repo
       - uses: actions/checkout@v3
 
+      # Set up Python3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
       # Create Lambda zip deployment
       - name: Create Lambda Zip Package
         run: deploy/deploy-lambda.sh ${SCRIPT_NAME_ENV}
-        
       - name: Upload zip package
         uses: actions/upload-artifact@v3.1.0
         with:
