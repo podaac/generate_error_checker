@@ -28,8 +28,8 @@ data "aws_efs_access_point" "fsap_error_checker" {
   access_point_id = var.fsap_id
 }
 
-data "aws_s3_bucket" "download_lists" {
-  bucket = "${var.prefix}-download-lists"
+data "aws_s3_bucket" "generate_data" {
+  bucket = "${var.prefix}"
 }
 
 data "aws_security_groups" "vpc_default_sg" {

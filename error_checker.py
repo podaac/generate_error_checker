@@ -91,10 +91,9 @@ def error_checker_handler(event, context):
     # Upload txt files to S3 bucket
     s3_error = None
     try:
-        upload_to_s3(event["prefix"], txt_list, logger)
+        upload_txt(event["prefix"], txt_list, logger)
         success = True
     except botocore.exceptions.ClientError as e:
-        logger.error("Error encountered uploading text files to download lists S3 bucket.")
         logger.error(f"Error - {e}")
         success = False
         s3_error = e
@@ -102,18 +101,22 @@ def error_checker_handler(event, context):
     # Check for success and delete files, publish to pending jobs
     sqs_error = None
     if success:
-        archive_files(combiner_file_list, combiner_error_logs, processor_file_list, processor_error_logs, logger)
+        zipped = archive_files(combiner_file_list, combiner_error_logs, processor_file_list, processor_error_logs, logger)
+        try:
+            upload_archive(event["prefix"], zipped, logger)
+        except botocore.exceptions.ClientError as e:
+            logger.error(e)
+            s3_error = e
         logger.info("Archived and removed any quarantined files and error logs from the EFS.")
         try:
             publish_to_pending(txt_list, event["prefix"], event["account"], event["region"], logger)
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Error publishing to https://sqs.{event['region']}.amazonaws.com/{event['account']}/{event['prefix']}-pending-jobs queue.")
-            logger.error(e)
+            logger.error(f"Error - {e}")
             sqs_error = e
             
     # Report any errors
     if len(combiner_error_list) != 0 or len(processor_error_list) != 0 or s3_error or sqs_error:
-        report_errors(combiner_error_list, processor_error_list, s3_error, sqs_error, logger)
+        report_errors(event["prefix"], combiner_error_list, processor_error_list, s3_error, sqs_error, logger)
         sys.exit(1)
         
     # Remove /tmp/generate txt files
@@ -210,19 +213,24 @@ def search_combiner(file_list, txt_dict, logger):
             logger.info(f"CMR response: {response}.")
             found = False
             for element in response:
-                if file.name in element:
-                    txt_dict[dataset].append([f"{GET_FILE_URL}/{element.split(' ')[2]}", element.split(' ')[0]])
-                    logger.info(f"Selected from CMR response: {element.split(' ')[2]}")
+                response_file = element.split(' ')[2]
+                if file.name == response_file:
+                    txt_dict[dataset].append([f"{GET_FILE_URL}/{response_file}", element.split(' ')[0]])
+                    logger.info(f"Selected from CMR response: {response_file}")
                     found = True
             # Check for quicklook
+            print("FOUND: ", found)
             if not found:
                 for element in response:
                     nrt_file = f"{file.name[:-3]}.NRT.nc"
-                    if nrt_file in element:
-                        txt_dict[dataset].append([f"{GET_FILE_URL}/{element.split(' ')[2]}", element.split(' ')[0]])
-                        logger.info(f"Selected from CMR response: {element.split(' ')[2]}")
-            else:
+                    response_file = element.split(' ')[2]
+                    if nrt_file == response_file:
+                        txt_dict[dataset].append([f"{GET_FILE_URL}/{response_file}", element.split(' ')[0]])
+                        logger.info(f"Selected from CMR response: {response_file}")
+                        found = True
+            if not found:
                 logger.info(f"Could not select a file for: {file.name} from CMR response.")
+                errors.append(file.name)
             
     return errors
 
@@ -320,7 +328,7 @@ def create_txt_files(txt_dict, logger):
             refined_txt_file = f"{dataset}_refined_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
             write_txt(refined, txt_dir.joinpath(refined_txt_file))
             txt_files[dataset].append(txt_dir.joinpath(refined_txt_file))
-            logger.info(f"Create refined TXT file: {txt_dir.joinpath(quicklook_txt_file)}")
+            logger.info(f"Create refined TXT file: {txt_dir.joinpath(refined_txt_file)}")
             
     return txt_files
         
@@ -343,16 +351,17 @@ def write_txt(downloads, txt_filename):
         for download in downloads:
             fh.write(f"{download[0]} {download[1]}\n")
 
-def upload_to_s3(prefix, txt_dict, logger):
+def upload_txt(prefix, txt_dict, logger):
     """Upload text lists to S3 bucket."""
 
     s3 = boto3.client("s3")
     try:
         for dataset, txts in txt_dict.items():
             for txt in txts:
-                s3.upload_file(str(txt), f"{prefix}-download-lists", f"{dataset}/{txt.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
-                logger.info(f"Uploaded: s3://{prefix}-download-lists/{dataset}/{txt.name}.")
+                s3.upload_file(str(txt), f"{prefix}", f"download-lists/{dataset}/{txt.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
+                logger.info(f"Uploaded: s3://{prefix}/download-lists/{dataset}/{txt.name}.")
     except botocore.exceptions.ClientError as e:
+        logger.error(f"Error encountered uploading text files to: s3://{prefix}/download-lists/{dataset}.")
         raise e
     
 def archive_files(combiner_file_list, combiner_error_logs, processor_file_list, 
@@ -367,6 +376,7 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
     archive_dir.mkdir(parents=True, exist_ok=True)
     datetime_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     
+    zipped = []
     if len(combiner_file_list) > 0 or len(combiner_error_logs) > 0:
         combiner_zip = archive_dir.joinpath(f"combiner_{datetime_str}.zip")
         with zipfile.ZipFile(combiner_zip, mode='w') as archive:
@@ -377,6 +387,7 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
                 archive.write(file, arcname=file.name)
                 logger.info(f"{file} written to {combiner_zip}.")
             logger.info(f"Archive created: {combiner_zip}.")
+        zipped.append(combiner_zip)
     
     if len(processor_file_list) > 0 or len(processor_error_logs) > 0:    
         processor_zip = archive_dir.joinpath(f"processor_{datetime_str}.zip")
@@ -388,14 +399,19 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
                 archive.write(file, arcname=file.name)
                 logger.info(f"{file} written to {processor_zip}.")
             logger.info(f"Archive created: {processor_zip}.")
+        zipped.append(processor_zip)
     
     # Remove files from EFS    
     delete_list = combiner_file_list + combiner_error_logs + processor_file_list + processor_error_logs
-    for file in delete_list: file.unlink()
+    for file in delete_list: 
+        file.unlink()
+        logger.info(f"Deleted: {file}")
     
     # Remove downloads .hidden directory
     remove_hidden_downloads(combiner_file_list, processor_file_list, logger)
     
+    return zipped
+
 def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
     """Remove Attempt to remove any downloads that may be tracked in the 
     combiner downloads .hidden directory"""
@@ -428,6 +444,26 @@ def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
             else:
                 os.remove(hidden_dir)
             logger.info(f"Removed from EFS: {hidden_dir}.")
+
+def upload_archive(prefix, zipped, logger):
+    """Uploaded archived quarantine files to S3 bucket and then delete zip from 
+    file system."""
+    
+    s3 = boto3.client("s3")
+    year = datetime.datetime.now().year
+    try:
+        for zip in zipped:
+            # Upload file to S3
+            s3.upload_file(str(zip), prefix, f"archive/error_checker/{year}/{zip.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
+            logger.info(f"Uploaded: s3://{prefix}/archive/error_checker/{year}/{zip.name}.")
+            
+            # Delete file from EFS
+            zip.unlink()
+            logger.info(f"File deleted: {zip}.")
+            
+    except botocore.exceptions.ClientError as e:
+        logger.error(f"Error encountered uploading zip files to: s3://{prefix}/archive/{year}/.")
+        raise e
     
 def publish_to_pending(txt_dict, prefix, account, region, logger):
     """Publish txt lists to pending jobs SQS Queue."""
@@ -447,9 +483,10 @@ def publish_to_pending(txt_dict, prefix, account, region, logger):
                 logger.info(f"Updated queue: https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs.")
                 logger.info(f"Published {dataset} list: {t_list}.")
             except botocore.exceptions.ClientError as e:
+                logger.error(f"Error publishing to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs-{dataset}.fifo queue.")
                 raise e
 
-def report_errors(combiner_error_list, processor_error_list, s3_error, sqs_error, logger):
+def report_errors(prefix, combiner_error_list, processor_error_list, s3_error, sqs_error, logger):
     """Report on any errors that occured during execution."""
     
     message = f"The Error Checker component has encountered an error.\n\n"
@@ -468,11 +505,11 @@ def report_errors(combiner_error_list, processor_error_list, s3_error, sqs_error
     
     if len(combiner_error_list) > 0 or len(processor_error_list) > 0:
         date = datetime.datetime.now(datetime.timezone.utc)
-        message += f"\nYou can find the files in the EFS archive directories compressed under the following date: {date.year}-{date.month}-{date.day}-{date.hour}...\n"
+        message += f"\nYou can find the files here: 's3://{prefix}/archive/error_checker/{date.year}' under the following date: {date.year}-{date.month}-{date.day}-{date.hour}:XX:XX...\n"
         
     # S3 error
     if s3_error:
-        message += f"\nEncounted error uploading downloader text files to download lists S3 bucket.\n"
+        message += f"\nEncounted error uploading to S3 bucket.\n"
         message += f"{s3_error}\n"
     
     # SQS error
