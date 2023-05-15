@@ -219,7 +219,6 @@ def search_combiner(file_list, txt_dict, logger):
                     logger.info(f"Selected from CMR response: {response_file}")
                     found = True
             # Check for quicklook
-            print("FOUND: ", found)
             if not found:
                 for element in response:
                     nrt_file = f"{file.name[:-3]}.NRT.nc"
