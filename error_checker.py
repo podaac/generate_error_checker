@@ -189,8 +189,12 @@ def search_combiner(file_list, txt_dict, logger):
     """
     
     errors = []
+    combined = []
     for file in file_list:
-        if "LAC_GSST" in file.name or "SNPP_GSST" in file.name: continue   # Skip failed combined file
+        if "LAC_GSST" in file.name or "SNPP_GSST" in file.name: 
+            located = check_for_downloads(file, file_list)
+            if not located: combined.append(file)
+            continue
         timestamp = file.name.split('.')[1].replace("T", "")
         file_name = file.name.split('.')[0]
         if "NRT" in file.name:
@@ -230,8 +234,28 @@ def search_combiner(file_list, txt_dict, logger):
             if not found:
                 logger.info(f"Could not select a file for: {file.name} from CMR response.")
                 errors.append(file.name)
+                
+    # Locate unmatched combined files
+    errors.append(search_processor(combined, txt_dict, logger))
             
     return errors
+
+def check_for_downloads(c_file, file_list):
+    """Check if the combined has corresponding download files."""
+    
+    # Extract timestamp
+    if c_file.name.startswith("refined_"):
+        timestamp = c_file.name.split("_")[1][1:].split('.')[0]
+    else:
+        timestamp = c_file.name.split('.')[0][1:]
+    
+    # Determine if have corresponding download files
+    located = False   
+    for file in file_list:
+        if timestamp in file.name and c_file.name != file.name:
+            located = True
+    
+    return located
 
 def search_processor(file_list, txt_dict, logger):
     """Search OBPG for file list and populate txt dictionary.
