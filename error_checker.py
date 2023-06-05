@@ -236,7 +236,7 @@ def search_combiner(file_list, txt_dict, logger):
                 errors.append(file.name)
                 
     # Locate unmatched combined files
-    errors.append(search_processor(combined, txt_dict, logger))
+    errors.extend(search_processor(combined, txt_dict, logger))
             
     return errors
 
