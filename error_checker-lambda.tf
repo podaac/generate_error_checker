@@ -7,7 +7,7 @@ resource "aws_lambda_function" "aws_lambda_error_checker" {
   runtime          = "python3.9"
   source_code_hash = filebase64sha256("error_checker.zip")
   timeout          = 600
-  memory_size      = 512
+  memory_size      = 1024
   vpc_config {
     subnet_ids         = data.aws_subnets.private_application_subnets.ids
     security_group_ids = data.aws_security_groups.vpc_default_sg.ids
