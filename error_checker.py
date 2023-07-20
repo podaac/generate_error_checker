@@ -292,10 +292,12 @@ def search_processor(file_list, txt_dict, logger):
                 logger.info(f"Located refined files for: {file.name} in CMR.")
                 for url in ref:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
+                    logger.info(f"Selected from CMR response: {url.split(' ')[2]}")
             elif len(nrt) > 0:
                 logger.info(f"Located quicklook files for: {file.name} in CMR.")
                 for url in nrt:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
+                    logger.info(f"Selected from CMR response: {url.split(' ')[2]}")
             else:
                 errors.append(file.name)
                 logger.error(f"Could not locate: {file.name} in CMR.")
