@@ -277,16 +277,18 @@ def search_processor(file_list, txt_dict, logger):
             logger.error(f"Could not locate: {file.name} in CMR.")
         else:
             
+            dataset = DATASET_DICT[file_name]
+            
             # Sort quicklook and refined, ignoring any other files returned
             nrt = []
             ref = []
             response = response.split('\n')
             for element in response:
-                if "IOP" in element or "LAND" in element or "PICT" in element: continue
+                if dataset == "viirs" and "OC" in element: continue
+                if "IOP" in element or "LAND" in element or "PICT" in element or "SST_TEST" in element or "VT10" in element: continue
                 if "NRT" in element: nrt.append(element)
                 else: ref.append(element)
             
-            dataset = DATASET_DICT[file_name]
             # Return refined if available
             if len(ref) > 0:
                 logger.info(f"Located refined files for: {file.name} in CMR.")
