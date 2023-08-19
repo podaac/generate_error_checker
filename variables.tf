@@ -26,12 +26,12 @@ variable "environment" {
   description = "The environment in which to deploy to"
 }
 
+variable "fsap_id" {
+  type        = string
+  description = "The ID of the EFS file system access point"
+}
+
 variable "prefix" {
   type        = string
   description = "Prefix to add to all AWS resources as a unique identifier"
-}
-
-variable "profile" {
-  type        = string
-  description = "Named profile to build infrastructure with"
 }

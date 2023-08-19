@@ -60,18 +60,18 @@ def error_checker_handler(event, context):
     # Find combiner errors
     combiner_file_list, combiner_error_logs = check_combiner()
     if len(combiner_file_list) > 0: 
-        logger.info("Located quarantined combiner files:")
+        logger.info("Located quarantined combiner files in the EFS:")
         for file in combiner_file_list: logger.info(file)
     else: 
-        logger.info("No quarantined combiner files were located.")
+        logger.info("No quarantined combiner files were located in the EFS.")
     
     # Find processor errors
     processor_file_list, processor_error_logs = check_processor()
     if len(processor_file_list) > 0: 
-        logger.info("Located quarantined processor files.")
+        logger.info("Located quarantined processor files in the EFS:")
         for file in processor_file_list: logger.info(file)
     else: 
-        logger.info("No quarantined processor files were located.")
+        logger.info("No quarantined processor files were located in the EFS.")
     
     # If there are no quarantine files, exit
     if len(combiner_file_list) == 0 and len(processor_file_list) == 0:
@@ -86,34 +86,37 @@ def error_checker_handler(event, context):
     processor_error_list = search_processor(processor_file_list, txt_dict, logger)
     
     # Create txt files
-    txt_list = create_txt_files(txt_dict)
+    txt_list = create_txt_files(txt_dict, logger)
     
     # Upload txt files to S3 bucket
     s3_error = None
     try:
-        upload_to_s3(event["prefix"], txt_list, logger)
+        upload_txt(event["prefix"], txt_list, logger)
         success = True
     except botocore.exceptions.ClientError as e:
-        logger.error("Error encountered uploading text files to download lists S3 bucket.")
-        logger.error(e)
+        logger.error(f"Error - {e}")
         success = False
         s3_error = e
         
     # Check for success and delete files, publish to pending jobs
     sqs_error = None
     if success:
-        archive_files(combiner_file_list, combiner_error_logs, processor_file_list, processor_error_logs, logger)
-        logger.info("Archived and removed any quarantined files and error logs.")
+        zipped = archive_files(combiner_file_list, combiner_error_logs, processor_file_list, processor_error_logs, logger)
+        try:
+            upload_archive(event["prefix"], zipped, logger)
+        except botocore.exceptions.ClientError as e:
+            logger.error(e)
+            s3_error = e
+        logger.info("Archived and removed any quarantined files and error logs from the EFS.")
         try:
             publish_to_pending(txt_list, event["prefix"], event["account"], event["region"], logger)
         except botocore.exceptions.ClientError as e:
-            logger.error("Error publishing to pending jobs queue.")
-            logger.error(e)
+            logger.error(f"Error - {e}")
             sqs_error = e
             
     # Report any errors
     if len(combiner_error_list) != 0 or len(processor_error_list) != 0 or s3_error or sqs_error:
-        report_errors(combiner_error_list, processor_error_list, s3_error, sqs_error, logger)
+        report_errors(event["prefix"], combiner_error_list, processor_error_list, s3_error, sqs_error, logger)
         sys.exit(1)
         
     # Remove /tmp/generate txt files
@@ -136,7 +139,7 @@ def get_logger():
     console_handler = logging.StreamHandler()
 
     # Create a formatter and add it to the handler
-    console_format = logging.Formatter("%(asctime)s - %(module)s - %(levelname)s : %(message)s")
+    console_format = logging.Formatter("%(module)s - %(levelname)s : %(message)s")
     console_handler.setFormatter(console_format)
 
     # Add handlers to logger
@@ -186,45 +189,73 @@ def search_combiner(file_list, txt_dict, logger):
     """
     
     errors = []
+    combined = []
     for file in file_list:
-        if "LAC_GSST" in file.name or "SNPP_GSST" in file.name: continue   # Skip failed combined file
+        if "LAC_GSST" in file.name or "SNPP_GSST" in file.name: 
+            located = check_for_downloads(file, file_list)
+            if not located: combined.append(file)
+            continue
         timestamp = file.name.split('.')[1].replace("T", "")
         file_name = file.name.split('.')[0]
         if "NRT" in file.name:
             file_type = '.'.join([file.name.split('.')[3], file.name.split('.')[4]])
         else:
             file_type = file.name.split('.')[3]
-        response = query_obpg(timestamp, file_name, txt_dict, file_type)
+        response = query_obpg(timestamp, file_name, file_type)
         response = response.split('\n')
         dataset = DATASET_DICT[file_name]
         
         # Ensure that exact combiner file is retrieved for resubmission
         if response[0] == "No Results Found":
             errors.append(file.name)
-            logger.error(f"Could not locate: {file.name}.")
+            logger.error(f"Could not locate: {file.name} in CMR.")
         elif len(response) == 1:
             logger.info(f"Located: {file.name}.")
             txt_dict[dataset].append([f"{GET_FILE_URL}/{response[0].split(' ')[2]}", response[0].split(' ')[0]])
         else:
-            logger.info(f"Located multiple: {file.name}.")
-            logger.info(f"Response: {response}.")
+            logger.info(f"Located multiple: {file.name} in CMR.")
+            logger.info(f"CMR response: {response}.")
             found = False
             for element in response:
-                if file.name in element:
-                    txt_dict[dataset].append([f"{GET_FILE_URL}/{element.split(' ')[2]}", element.split(' ')[0]])
-                    logger.info(f"Selected: {element.split(' ')[2]}")
+                response_file = element.split(' ')[2]
+                if file.name == response_file:
+                    txt_dict[dataset].append([f"{GET_FILE_URL}/{response_file}", element.split(' ')[0]])
+                    logger.info(f"Selected from CMR response: {response_file}")
                     found = True
             # Check for quicklook
             if not found:
                 for element in response:
                     nrt_file = f"{file.name[:-3]}.NRT.nc"
-                    if nrt_file in element:
-                        txt_dict[dataset].append([f"{GET_FILE_URL}/{element.split(' ')[2]}", element.split(' ')[0]])
-                        logger.info(f"Selected: {element.split(' ')[2]}")
-            else:
-                logger.info(f"Could not select a file for: {file.name}")
+                    response_file = element.split(' ')[2]
+                    if nrt_file == response_file:
+                        txt_dict[dataset].append([f"{GET_FILE_URL}/{response_file}", element.split(' ')[0]])
+                        logger.info(f"Selected from CMR response: {response_file}")
+                        found = True
+            if not found:
+                logger.info(f"Could not select a file for: {file.name} from CMR response.")
+                errors.append(file.name)
+                
+    # Locate unmatched combined files
+    errors.extend(search_processor(combined, txt_dict, logger))
             
     return errors
+
+def check_for_downloads(c_file, file_list):
+    """Check if the combined has corresponding download files."""
+    
+    # Extract timestamp
+    if c_file.name.startswith("refined_"):
+        timestamp = c_file.name.split("_")[1][1:].split('.')[0]
+    else:
+        timestamp = c_file.name.split('.')[0][1:]
+    
+    # Determine if have corresponding download files
+    located = False   
+    for file in file_list:
+        if timestamp in file.name and c_file.name != file.name:
+            located = True
+    
+    return located
 
 def search_processor(file_list, txt_dict, logger):
     """Search OBPG for file list and populate txt dictionary.
@@ -240,38 +271,42 @@ def search_processor(file_list, txt_dict, logger):
         else:
             timestamp = file.name.split('.')[0][1:].replace('T', '')
             file_name = PROC_DICT[file.name.split('.')[0][0]]
-        response = query_obpg(timestamp, file_name, txt_dict)
+        response = query_obpg(timestamp, file_name)
         if response == "No Results Found": 
             errors.append(file.name)
-            logger.error(f"Could not locate: {file.name}.")
+            logger.error(f"Could not locate: {file.name} in CMR.")
         else:
+            
+            dataset = DATASET_DICT[file_name]
             
             # Sort quicklook and refined, ignoring any other files returned
             nrt = []
             ref = []
             response = response.split('\n')
             for element in response:
-                if "IOP" in element or "LAND" in element or "PICT" in element: continue
+                if dataset == "viirs" and "OC" in element: continue
+                if "IOP" in element or "LAND" in element or "PICT" in element or "SST_TEST" in element or "VT10" in element: continue
                 if "NRT" in element: nrt.append(element)
                 else: ref.append(element)
             
-            dataset = DATASET_DICT[file_name]
             # Return refined if available
             if len(ref) > 0:
-                logger.info(f"Located refined files for: {file.name}.")
+                logger.info(f"Located refined files for: {file.name} in CMR.")
                 for url in ref:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
+                    logger.info(f"Selected from CMR response: {url.split(' ')[2]}")
             elif len(nrt) > 0:
-                logger.info(f"Located quicklook files for: {file.name}.")
+                logger.info(f"Located quicklook files for: {file.name} in CMR.")
                 for url in nrt:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
+                    logger.info(f"Selected from CMR response: {url.split(' ')[2]}")
             else:
                 errors.append(file.name)
-                logger.error(f"Could not locate: {file.name}.")
+                logger.error(f"Could not locate: {file.name} in CMR.")
             
     return errors
         
-def query_obpg(timestamp, file_name, txt_dict, file_type=None):
+def query_obpg(timestamp, file_name, file_type=None):
     """Query OBPG for file and checksum."""
     
     date = datetime.datetime.strptime(timestamp, "%Y%m%d%H%M%S")
@@ -295,7 +330,7 @@ def query_obpg(timestamp, file_name, txt_dict, file_type=None):
     req = requests.get(url=SEARCH_URL, params=params)
     return req.text.strip()
 
-def create_txt_files(txt_dict):
+def create_txt_files(txt_dict, logger):
     """Create downloader text file."""
     
     txt_dir = pathlib.Path("/tmp/generate")
@@ -312,6 +347,7 @@ def create_txt_files(txt_dict):
             quicklook_txt_file = f"{dataset}_quicklook_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
             write_txt(quicklook, txt_dir.joinpath(quicklook_txt_file))
             txt_files[dataset].append(txt_dir.joinpath(quicklook_txt_file))
+            logger.info(f"Create quicklook TXT file: {txt_dir.joinpath(quicklook_txt_file)}")
         
         # Refined text creation
         refined = [ download for download in unique_downloads if not "NRT" in download[0] ]
@@ -319,6 +355,7 @@ def create_txt_files(txt_dict):
             refined_txt_file = f"{dataset}_refined_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
             write_txt(refined, txt_dir.joinpath(refined_txt_file))
             txt_files[dataset].append(txt_dir.joinpath(refined_txt_file))
+            logger.info(f"Create refined TXT file: {txt_dir.joinpath(refined_txt_file)}")
             
     return txt_files
         
@@ -341,16 +378,17 @@ def write_txt(downloads, txt_filename):
         for download in downloads:
             fh.write(f"{download[0]} {download[1]}\n")
 
-def upload_to_s3(prefix, txt_dict, logger):
+def upload_txt(prefix, txt_dict, logger):
     """Upload text lists to S3 bucket."""
 
     s3 = boto3.client("s3")
     try:
         for dataset, txts in txt_dict.items():
             for txt in txts:
-                s3.upload_file(str(txt), f"{prefix}-download-lists", f"{dataset}/{txt.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
-                logger.info(f"Uploaded to download lists S3: {dataset}/{txt.name}.")
+                s3.upload_file(str(txt), f"{prefix}", f"download-lists/{dataset}/{txt.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
+                logger.info(f"Uploaded: s3://{prefix}/download-lists/{dataset}/{txt.name}.")
     except botocore.exceptions.ClientError as e:
+        logger.error(f"Error encountered uploading text files to: s3://{prefix}/download-lists/{dataset}.")
         raise e
     
 def archive_files(combiner_file_list, combiner_error_logs, processor_file_list, 
@@ -365,6 +403,7 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
     archive_dir.mkdir(parents=True, exist_ok=True)
     datetime_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S")
     
+    zipped = []
     if len(combiner_file_list) > 0 or len(combiner_error_logs) > 0:
         combiner_zip = archive_dir.joinpath(f"combiner_{datetime_str}.zip")
         with zipfile.ZipFile(combiner_zip, mode='w') as archive:
@@ -375,6 +414,7 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
                 archive.write(file, arcname=file.name)
                 logger.info(f"{file} written to {combiner_zip}.")
             logger.info(f"Archive created: {combiner_zip}.")
+        zipped.append(combiner_zip)
     
     if len(processor_file_list) > 0 or len(processor_error_logs) > 0:    
         processor_zip = archive_dir.joinpath(f"processor_{datetime_str}.zip")
@@ -386,14 +426,19 @@ def archive_files(combiner_file_list, combiner_error_logs, processor_file_list,
                 archive.write(file, arcname=file.name)
                 logger.info(f"{file} written to {processor_zip}.")
             logger.info(f"Archive created: {processor_zip}.")
+        zipped.append(processor_zip)
     
     # Remove files from EFS    
     delete_list = combiner_file_list + combiner_error_logs + processor_file_list + processor_error_logs
-    for file in delete_list: file.unlink()
+    for file in delete_list: 
+        file.unlink()
+        logger.info(f"Deleted: {file}")
     
     # Remove downloads .hidden directory
     remove_hidden_downloads(combiner_file_list, processor_file_list, logger)
     
+    return zipped
+
 def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
     """Remove Attempt to remove any downloads that may be tracked in the 
     combiner downloads .hidden directory"""
@@ -406,7 +451,7 @@ def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
             if hidden_dir.exists(): os.rmdir(hidden_dir)
         else:
             if hidden_dir.exists(): hidden_dir.unlink()
-        logger.info(f"Removed: {hidden_dir}.")
+        logger.info(f"Removed from EFS: {hidden_dir}.")
     
     for processor_file in processor_file_list:
         if processor_file.name.startswith("refined_"):
@@ -425,7 +470,27 @@ def remove_hidden_downloads(combiner_file_list, processor_file_list, logger):
                 os.rmdir(hidden_dir)
             else:
                 os.remove(hidden_dir)
-            logger.info(f"Removed: {hidden_dir}.")
+            logger.info(f"Removed from EFS: {hidden_dir}.")
+
+def upload_archive(prefix, zipped, logger):
+    """Uploaded archived quarantine files to S3 bucket and then delete zip from 
+    file system."""
+    
+    s3 = boto3.client("s3")
+    year = datetime.datetime.now().year
+    try:
+        for zip in zipped:
+            # Upload file to S3
+            s3.upload_file(str(zip), prefix, f"archive/error_checker/{year}/{zip.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
+            logger.info(f"Uploaded: s3://{prefix}/archive/error_checker/{year}/{zip.name}.")
+            
+            # Delete file from EFS
+            zip.unlink()
+            logger.info(f"File deleted: {zip}.")
+            
+    except botocore.exceptions.ClientError as e:
+        logger.error(f"Error encountered uploading zip files to: s3://{prefix}/archive/{year}/.")
+        raise e
     
 def publish_to_pending(txt_dict, prefix, account, region, logger):
     """Publish txt lists to pending jobs SQS Queue."""
@@ -442,32 +507,36 @@ def publish_to_pending(txt_dict, prefix, account, region, logger):
                     MessageDeduplicationId=f"{prefix}-{dataset}-{random.randint(1000,9999)}",
                     MessageGroupId = f"{prefix}-{dataset}"
                 )
-                logger.info(f"Updated queue: https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs")
+                logger.info(f"Updated queue: https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs.")
                 logger.info(f"Published {dataset} list: {t_list}.")
             except botocore.exceptions.ClientError as e:
+                logger.error(f"Error publishing to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs-{dataset}.fifo queue.")
                 raise e
 
-def report_errors(combiner_error_list, processor_error_list, s3_error, sqs_error, logger):
+def report_errors(prefix, combiner_error_list, processor_error_list, s3_error, sqs_error, logger):
     """Report on any errors that occured during execution."""
     
     message = f"The Error Checker component has encountered an error.\n\n"
     
     # Error files
-    message += f"The following files were quarantined but could not be located in OBPG to restart the Generate worfklow: \n"
-    message += f"\tCOMBINER FILES: \n"
-    for error_file in combiner_error_list:
-        message += f"\t\t{error_file}\n"
-        
-    message += f"\tPROCESSOR FILES: \n"
-    for error_file in processor_error_list:
-        message += f"\t\t{error_file}\n"
+    message += f"The following files were quarantined but could not be located in OBPG to restart the Generate workflow: \n"
+    if len(combiner_error_list) > 0:
+        message += f"\tCOMBINER FILES: \n"
+        for error_file in combiner_error_list:
+            message += f"\t\t{error_file}\n"
     
-    date = datetime.datetime.now(datetime.timezone.utc)
-    message += f"\nYou can find the files in one of the EFS archive directories compressed under the following date: {date.year}-{date.month}-{date.day}-{date.hour}...\n"
+    if len(processor_error_list) > 0:    
+        message += f"\tPROCESSOR FILES: \n"
+        for error_file in processor_error_list:
+            message += f"\t\t{error_file}\n"
+    
+    if len(combiner_error_list) > 0 or len(processor_error_list) > 0:
+        date = datetime.datetime.now(datetime.timezone.utc)
+        message += f"\nYou can find the files here: 's3://{prefix}/archive/error_checker/{date.year}' under the following date: {date.year}-{date.month}-{date.day}-{date.hour}:XX:XX...\n"
         
     # S3 error
     if s3_error:
-        message += f"\nEncounted error uploading downloader text files to download lists S3 bucket.\n"
+        message += f"\nEncounted error uploading to S3 bucket.\n"
         message += f"{s3_error}\n"
     
     # SQS error
@@ -501,6 +570,7 @@ def publish_event(message, logger):
             Message = message,
             Subject = subject
         )
+        logger.info(f"Error published to: {topic_arn}.")
     except botocore.exceptions.ClientError as e:
         logger.error(f"Failed to publish to SNS Topic: {topic_arn}.")
         logger.error(f"Error - {e}")
