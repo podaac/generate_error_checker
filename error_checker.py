@@ -61,7 +61,7 @@ def error_checker_handler(event, context):
     combiner_file_list, combiner_error_logs = check_combiner()
     if len(combiner_file_list) > 0: 
         logger.info("Located quarantined combiner files in the EFS:")
-        for file in combiner_file_list: logger.info(file)
+        for file in combiner_file_list: logger.info(f"Quarantined: {file.name}")
     else: 
         logger.info("No quarantined combiner files were located in the EFS.")
     
@@ -69,9 +69,11 @@ def error_checker_handler(event, context):
     processor_file_list, processor_error_logs = check_processor()
     if len(processor_file_list) > 0: 
         logger.info("Located quarantined processor files in the EFS:")
-        for file in processor_file_list: logger.info(file)
+        for file in processor_file_list: logger.info(f"Quarantined: {file.name}")
     else: 
         logger.info("No quarantined processor files were located in the EFS.")
+        
+    logger.info(f"Number of quarantined files detected: {len(combiner_file_list) + len(processor_file_list)}")
     
     # If there are no quarantine files, exit
     if len(combiner_file_list) == 0 and len(processor_file_list) == 0:
@@ -210,17 +212,16 @@ def search_combiner(file_list, txt_dict, logger):
             errors.append(file.name)
             logger.error(f"Could not locate: {file.name} in CMR.")
         elif len(response) == 1:
-            logger.info(f"Located: {file.name}.")
             txt_dict[dataset].append([f"{GET_FILE_URL}/{response[0].split(' ')[2]}", response[0].split(' ')[0]])
+            logger.info(f"SST file | CMR response: {file.name} | {response[0].split(' ')[2]}")
         else:
-            logger.info(f"Located multiple: {file.name} in CMR.")
-            logger.info(f"CMR response: {response}.")
+            # logger.info(f"Located multiple: {file.name} in CMR.")
+            # logger.info(f"CMR response: {response}.")
             found = False
             for element in response:
                 response_file = element.split(' ')[2]
                 if file.name == response_file:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{response_file}", element.split(' ')[0]])
-                    logger.info(f"Selected from CMR response: {response_file}")
                     found = True
             # Check for quicklook
             if not found:
@@ -229,11 +230,13 @@ def search_combiner(file_list, txt_dict, logger):
                     response_file = element.split(' ')[2]
                     if nrt_file == response_file:
                         txt_dict[dataset].append([f"{GET_FILE_URL}/{response_file}", element.split(' ')[0]])
-                        logger.info(f"Selected from CMR response: {response_file}")
                         found = True
             if not found:
                 logger.info(f"Could not select a file for: {file.name} from CMR response.")
                 errors.append(file.name)
+            
+            if found:
+                logger.info(f"SST file | CMR response: {file.name} | {response_file}")
                 
     # Locate unmatched combined files
     errors.extend(search_processor(combined, txt_dict, logger))
@@ -291,15 +294,17 @@ def search_processor(file_list, txt_dict, logger):
             
             # Return refined if available
             if len(ref) > 0:
-                logger.info(f"Located refined files for: {file.name} in CMR.")
+                files = []
                 for url in ref:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
-                    logger.info(f"Selected from CMR response: {url.split(' ')[2]}")
+                    files.append(url.split(' ')[2])
+                logger.info(f"SST file | CMR response: {file.name} | {', '.join(files)}")
             elif len(nrt) > 0:
-                logger.info(f"Located quicklook files for: {file.name} in CMR.")
+                files = []
                 for url in nrt:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
-                    logger.info(f"Selected from CMR response: {url.split(' ')[2]}")
+                    files.append(url.split(' ')[2])
+                logger.info(f"SST file | CMR response: {file.name} | {', '.join(files)}")
             else:
                 errors.append(file.name)
                 logger.error(f"Could not locate: {file.name} in CMR.")
@@ -345,7 +350,7 @@ def create_txt_files(txt_dict, logger):
         quicklook = [ download for download in unique_downloads if "NRT" in download[0] ]
         if len(quicklook) > 0:
             quicklook_txt_file = f"{dataset}_quicklook_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
-            write_txt(quicklook, txt_dir.joinpath(quicklook_txt_file))
+            write_txt(quicklook, txt_dir.joinpath(quicklook_txt_file), logger)
             txt_files[dataset].append(txt_dir.joinpath(quicklook_txt_file))
             logger.info(f"Create quicklook TXT file: {txt_dir.joinpath(quicklook_txt_file)}")
         
@@ -353,7 +358,7 @@ def create_txt_files(txt_dict, logger):
         refined = [ download for download in unique_downloads if not "NRT" in download[0] ]
         if len(refined) > 0:
             refined_txt_file = f"{dataset}_refined_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
-            write_txt(refined, txt_dir.joinpath(refined_txt_file))
+            write_txt(refined, txt_dir.joinpath(refined_txt_file), logger)
             txt_files[dataset].append(txt_dir.joinpath(refined_txt_file))
             logger.info(f"Create refined TXT file: {txt_dir.joinpath(refined_txt_file)}")
             
@@ -370,13 +375,14 @@ def remove_duplicates(downloads):
             unique.append(download)
     return unique
         
-def write_txt(downloads, txt_filename):
+def write_txt(downloads, txt_filename, logger):
     """Write downloads to text file."""
     
     downloads.sort(reverse=True)    # Sort descending
     with open(txt_filename, 'w') as fh:
         for download in downloads:
             fh.write(f"{download[0]} {download[1]}\n")
+            logger.info(f"Processed: {download[0].split('/')[-1]}")
 
 def upload_txt(prefix, txt_dict, logger):
     """Upload text lists to S3 bucket."""
@@ -507,8 +513,7 @@ def publish_to_pending(txt_dict, prefix, account, region, logger):
                     MessageDeduplicationId=f"{prefix}-{dataset}-{random.randint(1000,9999)}",
                     MessageGroupId = f"{prefix}-{dataset}"
                 )
-                logger.info(f"Updated queue: https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs.")
-                logger.info(f"Published {dataset} list: {t_list}.")
+                logger.info(f"Published {dataset} list {t_list} to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs.")
             except botocore.exceptions.ClientError as e:
                 logger.error(f"Error publishing to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs-{dataset}.fifo queue.")
                 raise e
