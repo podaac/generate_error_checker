@@ -96,7 +96,7 @@ def error_checker_handler(event, context):
         upload_txt(event["prefix"], txt_list, logger)
         success = True
     except botocore.exceptions.ClientError as e:
-        logger.error(f"Error - {e}")
+        logger.error(e)
         success = False
         s3_error = e
         
@@ -113,7 +113,7 @@ def error_checker_handler(event, context):
         try:
             publish_to_pending(txt_list, event["prefix"], event["account"], event["region"], logger)
         except botocore.exceptions.ClientError as e:
-            logger.error(f"Error - {e}")
+            logger.error(e)
             sqs_error = e
             
     # Report any errors
@@ -394,7 +394,7 @@ def upload_txt(prefix, txt_dict, logger):
                 s3.upload_file(str(txt), f"{prefix}", f"download-lists/{dataset}/{txt.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
                 logger.info(f"Uploaded: s3://{prefix}/download-lists/{dataset}/{txt.name}.")
     except botocore.exceptions.ClientError as e:
-        logger.error(f"Error encountered uploading text files to: s3://{prefix}/download-lists/{dataset}.")
+        logger.info(f"Error encountered uploading text files to: s3://{prefix}/download-lists/{dataset}.")
         raise e
     
 def archive_files(combiner_file_list, combiner_error_logs, processor_file_list, 
@@ -495,7 +495,7 @@ def upload_archive(prefix, zipped, logger):
             logger.info(f"File deleted: {zip}.")
             
     except botocore.exceptions.ClientError as e:
-        logger.error(f"Error encountered uploading zip files to: s3://{prefix}/archive/{year}/.")
+        logger.info(f"Error encountered uploading zip files to: s3://{prefix}/archive/{year}/.")
         raise e
     
 def publish_to_pending(txt_dict, prefix, account, region, logger):
@@ -515,16 +515,24 @@ def publish_to_pending(txt_dict, prefix, account, region, logger):
                 )
                 logger.info(f"Published {dataset} list {t_list} to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs.")
             except botocore.exceptions.ClientError as e:
-                logger.error(f"Error publishing to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs-{dataset}.fifo queue.")
+                logger.info(f"Error publishing to https://sqs.{region}.amazonaws.com/{account}/{prefix}-pending-jobs-{dataset}.fifo queue.")
                 raise e
 
 def report_errors(prefix, combiner_error_list, processor_error_list, s3_error, sqs_error, logger):
     """Report on any errors that occured during execution."""
     
-    message = f"The Error Checker component has encountered an error.\n\n"
+    message = "The Error Checker component has encountered an error.\n\n"
+    
+    # Logging
+    message += "LOG INFORMATION:\n"
+    message += f"Log Group: {os.environ.get('AWS_LAMBDA_LOG_GROUP_NAME')}\n"
+    message += f"Log Stream: {os.environ.get('AWS_LAMBDA_LOG_STREAM_NAME')}\n\n"
     
     # Error files
-    message += f"The following files were quarantined but could not be located in OBPG to restart the Generate workflow: \n"
+    message += "ERROR INFORMATION:\n"
+    
+    if len(combiner_error_list) > 0 or len(processor_error_list) > 0:
+        message += f"The following files were quarantined but could not be located in OBPG to restart the Generate workflow: \n"
     if len(combiner_error_list) > 0:
         message += f"\tCOMBINER FILES: \n"
         for error_file in combiner_error_list:
@@ -537,17 +545,19 @@ def report_errors(prefix, combiner_error_list, processor_error_list, s3_error, s
     
     if len(combiner_error_list) > 0 or len(processor_error_list) > 0:
         date = datetime.datetime.now(datetime.timezone.utc)
-        message += f"\nYou can find the files here: 's3://{prefix}/archive/error_checker/{date.year}' under the following date: {date.year}-{date.month}-{date.day}-{date.hour}:XX:XX...\n"
+        message += f"\nYou can find the files here: 's3://{prefix}/archive/error_checker/{date.year}' under the following date: {date.year}-{date.month}-{date.day}-{date.hour}:XX:XX...\n\n"
         
     # S3 error
     if s3_error:
-        message += f"\nEncounted error uploading to S3 bucket.\n"
-        message += f"{s3_error}\n"
+        message += f"Encounted error uploading to S3 bucket.\n"
+        message += f"{s3_error}\n\n"
     
     # SQS error
     if sqs_error:
-        message += f"\nEncounted error publishing to pending jobs queue.\n"
-        message += f"{sqs_error}\n"
+        message += f"Encounted error publishing to pending jobs queue.\n"
+        message += f"{sqs_error}\n\n"
+        
+    message += "Please check the logs for further information.\n\n\n"
         
     publish_event(message, logger)
     
@@ -560,8 +570,8 @@ def publish_event(message, logger):
     try:
         topics = sns.list_topics()
     except botocore.exceptions.ClientError as e:
-        logger.error("Failed to list SNS Topics.")
-        logger.error(f"Error - {e}")
+        logger.info("Failed to list SNS Topics.")
+        logger.error(e)
         sys.exit(1)
     for topic in topics["Topics"]:
         if TOPIC_STRING in topic["TopicArn"]:
@@ -577,8 +587,8 @@ def publish_event(message, logger):
         )
         logger.info(f"Error published to: {topic_arn}.")
     except botocore.exceptions.ClientError as e:
-        logger.error(f"Failed to publish to SNS Topic: {topic_arn}.")
-        logger.error(f"Error - {e}")
+        logger.info(f"Failed to publish to SNS Topic: {topic_arn}.")
+        logger.error(e)
         sys.exit(1)
     
     logger.info(f"Message published to SNS Topic: {topic_arn}.")
