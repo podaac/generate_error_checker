@@ -51,17 +51,21 @@ def error_checker_handler(event, context):
     
     logger = get_logger()
     
+    # Track data
     txt_dict = {
         "aqua" : [],
         "terra": [],
         "viirs": []
     }
+    quarantined = []
     
     # Find combiner errors
     combiner_file_list, combiner_error_logs = check_combiner()
     if len(combiner_file_list) > 0: 
         logger.info("Located quarantined combiner files in the EFS:")
-        for file in combiner_file_list: logger.info(f"Quarantined: {file.name}")
+        for file in combiner_file_list: 
+            logger.info(f"Quarantined: {file.name}")
+            quarantined.append(file.name)
     else: 
         logger.info("No quarantined combiner files were located in the EFS.")
     
@@ -69,7 +73,9 @@ def error_checker_handler(event, context):
     processor_file_list, processor_error_logs = check_processor()
     if len(processor_file_list) > 0: 
         logger.info("Located quarantined processor files in the EFS:")
-        for file in processor_file_list: logger.info(f"Quarantined: {file.name}")
+        for file in processor_file_list: 
+            logger.info(f"Quarantined: {file.name}")
+            quarantined.append(file.name)
     else: 
         logger.info("No quarantined processor files were located in the EFS.")
         
@@ -82,21 +88,23 @@ def error_checker_handler(event, context):
         return
     
     # Search for combiner files in OBPG
-    combiner_error_list = search_combiner(combiner_file_list, txt_dict, logger)
+    cmr_response, combiner_error_list = search_combiner(combiner_file_list, txt_dict, logger)
     
     # Search for processor files in OBPG
-    processor_error_list = search_processor(processor_file_list, txt_dict, logger)
+    p_cmr, processor_error_list = search_processor(processor_file_list, txt_dict, logger)
+    cmr_response.extend(p_cmr)
     
     # Create txt files
-    txt_list = create_txt_files(txt_dict, logger)
+    txt_list, processed = create_txt_files(txt_dict, logger)
     
     # Upload txt files to S3 bucket
     s3_error = None
     try:
-        upload_txt(event["prefix"], txt_list, logger)
+        txt_files = upload_txt(event["prefix"], txt_list, logger)
         success = True
     except botocore.exceptions.ClientError as e:
         logger.error(e)
+        txt_files = []
         success = False
         s3_error = e
         
@@ -124,6 +132,9 @@ def error_checker_handler(event, context):
     # Remove /tmp/generate txt files
     remove_tmp(txt_list)
     logger.info("Removed temporary txt files.")
+    
+    # Print final log message
+    print_final_log(logger, quarantined, cmr_response, processed, txt_files)
     
 def get_logger():
     """Return a formatted logger object."""
@@ -190,6 +201,7 @@ def search_combiner(file_list, txt_dict, logger):
     Return list of files where error occured.
     """
     
+    cmr_response = []
     errors = []
     combined = []
     for file in file_list:
@@ -214,6 +226,7 @@ def search_combiner(file_list, txt_dict, logger):
         elif len(response) == 1:
             txt_dict[dataset].append([f"{GET_FILE_URL}/{response[0].split(' ')[2]}", response[0].split(' ')[0]])
             logger.info(f"SST file | CMR response: {file.name} | {response[0].split(' ')[2]}")
+            cmr_response.append(f"{file.name} | {response[0].split(' ')[2]}")
         else:
             # logger.info(f"Located multiple: {file.name} in CMR.")
             # logger.info(f"CMR response: {response}.")
@@ -237,11 +250,14 @@ def search_combiner(file_list, txt_dict, logger):
             
             if found:
                 logger.info(f"SST file | CMR response: {file.name} | {response_file}")
+                cmr_response.append(f"{file.name} | {response[0].split(' ')[2]}")
                 
     # Locate unmatched combined files
-    errors.extend(search_processor(combined, txt_dict, logger))
+    p_cmr, p_errors = search_processor(combined, txt_dict, logger)
+    cmr_response.extend(p_cmr)
+    errors.extend(p_errors)
             
-    return errors
+    return cmr_response, errors
 
 def check_for_downloads(c_file, file_list):
     """Check if the combined has corresponding download files."""
@@ -266,6 +282,7 @@ def search_processor(file_list, txt_dict, logger):
     Return list of files where error occured.
     """
     
+    cmr_response = []
     errors = []
     for file in file_list:
         if file.name.startswith("refined_"):
@@ -299,17 +316,19 @@ def search_processor(file_list, txt_dict, logger):
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
                     files.append(url.split(' ')[2])
                 logger.info(f"SST file | CMR response: {file.name} | {', '.join(files)}")
+                cmr_response.append(f"{file.name} | {'; '.join(files)}")
             elif len(nrt) > 0:
                 files = []
                 for url in nrt:
                     txt_dict[dataset].append([f"{GET_FILE_URL}/{url.split(' ')[2]}", url.split(' ')[0]])
                     files.append(url.split(' ')[2])
                 logger.info(f"SST file | CMR response: {file.name} | {', '.join(files)}")
+                cmr_response.append(f"{file.name} | {'; '.join(files)}")
             else:
                 errors.append(file.name)
                 logger.error(f"Could not locate: {file.name} in CMR.")
             
-    return errors
+    return cmr_response, errors
         
 def query_obpg(timestamp, file_name, file_type=None):
     """Query OBPG for file and checksum."""
@@ -342,6 +361,7 @@ def create_txt_files(txt_dict, logger):
     txt_dir.mkdir(parents=True, exist_ok=True)
     date = datetime.datetime.now(datetime.timezone.utc)
     txt_files = { "aqua": [], "terra": [], "viirs": []}
+    processed = []
     for dataset, downloads in txt_dict.items():
         
         unique_downloads = remove_duplicates(downloads)
@@ -350,7 +370,7 @@ def create_txt_files(txt_dict, logger):
         quicklook = [ download for download in unique_downloads if "NRT" in download[0] ]
         if len(quicklook) > 0:
             quicklook_txt_file = f"{dataset}_quicklook_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
-            write_txt(quicklook, txt_dir.joinpath(quicklook_txt_file), logger)
+            processed.extend(write_txt(quicklook, txt_dir.joinpath(quicklook_txt_file), logger))
             txt_files[dataset].append(txt_dir.joinpath(quicklook_txt_file))
             logger.info(f"Create quicklook TXT file: {txt_dir.joinpath(quicklook_txt_file)}")
         
@@ -358,11 +378,11 @@ def create_txt_files(txt_dict, logger):
         refined = [ download for download in unique_downloads if not "NRT" in download[0] ]
         if len(refined) > 0:
             refined_txt_file = f"{dataset}_refined_{date.year}_{date.month}_{date.day}_{date.hour}_{date.minute}_{date.second}_{random.randint(1000,9999)}.txt"
-            write_txt(refined, txt_dir.joinpath(refined_txt_file), logger)
+            processed.extend(write_txt(refined, txt_dir.joinpath(refined_txt_file), logger))
             txt_files[dataset].append(txt_dir.joinpath(refined_txt_file))
             logger.info(f"Create refined TXT file: {txt_dir.joinpath(refined_txt_file)}")
             
-    return txt_files
+    return txt_files, processed
         
 def remove_duplicates(downloads):
     """Remove duplicate downloads from list"""
@@ -379,23 +399,29 @@ def write_txt(downloads, txt_filename, logger):
     """Write downloads to text file."""
     
     downloads.sort(reverse=True)    # Sort descending
+    processed = []
     with open(txt_filename, 'w') as fh:
         for download in downloads:
             fh.write(f"{download[0]} {download[1]}\n")
             logger.info(f"Processed: {download[0].split('/')[-1]}")
+            processed.append(download[0].split('/')[-1])
+    return processed
 
 def upload_txt(prefix, txt_dict, logger):
     """Upload text lists to S3 bucket."""
 
     s3 = boto3.client("s3")
+    txt_files = []
     try:
         for dataset, txts in txt_dict.items():
             for txt in txts:
                 s3.upload_file(str(txt), f"{prefix}", f"download-lists/{dataset}/{txt.name}", ExtraArgs={"ServerSideEncryption": "aws:kms"})
                 logger.info(f"Uploaded: s3://{prefix}/download-lists/{dataset}/{txt.name}.")
+                txt_files.append(txt.name)
     except botocore.exceptions.ClientError as e:
         logger.info(f"Error encountered uploading text files to: s3://{prefix}/download-lists/{dataset}.")
         raise e
+    return txt_files
     
 def archive_files(combiner_file_list, combiner_error_logs, processor_file_list, 
                   processor_error_logs, logger):
@@ -598,3 +624,16 @@ def remove_tmp(txt_list):
     
     for txt_files in txt_list.values():
         for txt_file in txt_files: txt_file.unlink()
+        
+def print_final_log(logger, quarantined, cmr_response, processed, error_checker_txt):
+    """Print final log message."""
+    
+    # Organize file data into a string
+    final_log_message = f"number_quarantined: {len(quarantined)}"
+    if len(quarantined) > 0: final_log_message += f" - quarantined: {(', ').join(quarantined)}"
+    if len(cmr_response) > 0: final_log_message += f" - cmr_response: {(', ').join(cmr_response)}"
+    if len(processed) > 0: final_log_message += f" - processed: {(', ').join(processed)}"
+    if len(error_checker_txt) > 0: final_log_message += f" - error_checker_txt: {(', ').join(error_checker_txt)}"
+    
+    # Print final log message and remove temp log file
+    logger.info(final_log_message)
