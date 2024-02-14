@@ -629,7 +629,7 @@ def print_final_log(logger, quarantined, cmr_response, processed, error_checker_
     """Print final log message."""
     
     # Organize file data into a string
-    final_log_message = f"number_quarantined: {len(quarantined)}"
+    final_log_message = f"final_log: number_quarantined: {len(quarantined)}"
     if len(quarantined) > 0: final_log_message += f" - quarantined: {(', ').join(quarantined)}"
     if len(cmr_response) > 0: final_log_message += f" - cmr_response: {(', ').join(cmr_response)}"
     if len(processed) > 0: final_log_message += f" - processed: {(', ').join(processed)}"
