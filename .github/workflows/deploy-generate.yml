@@ -88,15 +88,15 @@ jobs:
             --project-name=${{ github.repository }}
 
       # Set up Python3
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
       # Create Lambda zip deployment
       - name: Create Lambda Zip Package
         run: deploy/deploy-lambda.sh ${SCRIPT_NAME_ENV}
       - name: Upload zip package
-        uses: actions/upload-artifact@v3.1.0
+        uses: actions/upload-artifact@v4
         with:
           name: error_checker.zip
           path: error_checker.zip
