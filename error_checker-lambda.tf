@@ -4,7 +4,7 @@ resource "aws_lambda_function" "aws_lambda_error_checker" {
   function_name    = "${var.prefix}-error-checker"
   role             = aws_iam_role.aws_lambda_execution_role.arn
   handler          = "error_checker.error_checker_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.12"
   source_code_hash = filebase64sha256("error_checker.zip")
   timeout          = 600
   memory_size      = 1024
