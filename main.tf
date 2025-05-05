@@ -59,6 +59,9 @@ data "aws_sqs_queue" "pending_jobs_viirs" {
   name = "${var.prefix}-pending-jobs-viirs.fifo"
 }
 
+data "aws_sqs_queue" "pending_jobs_jpss1" {
+  name = "${var.prefix}-pending-jobs-jpss1.fifo"
+}
 
 data "aws_subnet" "private_application_subnet" {
   for_each = toset(data.aws_subnets.private_application_subnets.ids)
