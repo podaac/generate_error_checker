@@ -29,18 +29,21 @@ DATA_DIR = pathlib.Path("/mnt/data/")
 DATASET_DICT = {
     "AQUA_MODIS": "aqua",
     "TERRA_MODIS": "terra",
-    "SNPP_VIIRS": "viirs"
+    "SNPP_VIIRS": "viirs",
+    "JPSS1_VIIRS": "JPSS1"
 }
 GET_FILE_URL = "https://oceandata.sci.gsfc.nasa.gov/cgi/getfile"
 PROC_DICT = {
     "A": "AQUA_MODIS",
     "T": "TERRA_MODIS",
-    "V": "SNPP_VIIRS"
+    "V": "SNPP_VIIRS",
+    "J": "JPSS1_VIIRS"
 }
 DOWNLOAD_DICT = {
     "AQUA_MODIS": "MODIS_AQUA_L2_SST_OBPG",
     "TERRA_MODIS": "MODIS_TERRA_L2_SST_OBPG",
-    "SNPP_VIIRS": "VIIRS_L2_SST_OBPG"
+    "SNPP_VIIRS": "VIIRS_L2_SST_OBPG",
+    "JPSS1_VIIRS": "JPSS1_L2_SST_OBPG"
 }
 SEARCH_URL = "https://oceandata.sci.gsfc.nasa.gov/api/file_search"
 TOPIC_STRING = "batch-job-failure"
@@ -55,7 +58,8 @@ def error_checker_handler(event, context):
     txt_dict = {
         "aqua" : [],
         "terra": [],
-        "viirs": []
+        "viirs": [],
+        "jpss1": []
     }
     quarantined = []
     
@@ -360,7 +364,7 @@ def create_txt_files(txt_dict, logger):
     txt_dir = pathlib.Path("/tmp/generate")
     txt_dir.mkdir(parents=True, exist_ok=True)
     date = datetime.datetime.now(datetime.timezone.utc)
-    txt_files = { "aqua": [], "terra": [], "viirs": []}
+    txt_files = { "aqua": [], "terra": [], "viirs": [], "jpss1": []}
     processed = []
     for dataset, downloads in txt_dict.items():
         
