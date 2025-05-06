@@ -7,7 +7,7 @@ variable "app_name" {
 variable "app_version" {
   type        = string
   description = "The application version number"
-  default     = "0.1.3"
+  default     = "0.1.4"
 }
 
 variable "aws_region" {
